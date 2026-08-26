@@ -60,12 +60,30 @@ async function callGemini(systemPrompt,messages,opts={}){
   const c=[];if(systemPrompt)c.push({role:'user',parts:[{text:systemPrompt}]},{role:'model',parts:[{text:'Understood.'}]});
   for(const m of messages)c.push({role:m.role==='ai'?'model':'user',parts:[{text:m.text}]});
   const t=opts.temperature??0.7,k=opts.maxTokens??800,s=!!opts.onChunk;
-  const u=`https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.MODEL}:${s?'streamGenerateContent?alt=sse':'generateContent'}?key=${CONFIG.API_KEY}`;
-  const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:c,generationConfig:{temperature:t,maxOutputTokens:k,topK:30}})});
+  let url=`https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.MODEL}:generateContent?key=${CONFIG.API_KEY}`;
+  if(s) url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.MODEL}:streamGenerateContent?alt=sse?key=${CONFIG.API_KEY}`;
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:c,generationConfig:{temperature:t,maxOutputTokens:k}})});
   if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.error?.message||`HTTP ${r.status}`)}
-  if(!s){const d=await r.json();return d.candidates[0].content.parts[0].text}
+  if(!s){const d=await r.json();return d.candidates?.[0]?.content?.parts?.[0]?.text||''}
+  // Streaming with better parsing
   const rd=r.body.getReader(),dc=new TextDecoder();let full='';
-  while(true){const{done,value}=await rd.read();if(done)break;const ch=dc.decode(value,{stream:true});for(const l of ch.split('\n')){if(!l.startsWith('data: '))continue;try{const d=JSON.parse(l.slice(6));const t=d?.candidates?.[0]?.content?.parts?.[0]?.text||'';full+=t;opts.onChunk(t)}catch(e){}}}
+  try{
+    while(true){
+      const{done,value}=await rd.read();
+      if(done)break;
+      const ch=dc.decode(value,{stream:true});
+      for(const line of ch.split('\n')){
+        if(!line.trim())continue;
+        if(!line.startsWith('data: '))continue;
+        const jsonStr=line.slice(6).trim();
+        if(jsonStr==='[DONE]')break;
+        try{
+          const d=JSON.parse(jsonStr);
+          const text=d?.candidates?.[0]?.content?.parts?.[0]?.text||'';
+          if(text){full+=text;opts.onChunk?.(text)}
+        }catch(e){console.warn('Parse error:',e)}}
+    }
+  }catch(err){console.error('Stream error:',err)}
   return full;
 }
 function showLoading(msg){loadingText.textContent=msg||LOADING_MESSAGES[Math.floor(Math.random()*LOADING_MESSAGES.length)];loadingOverlay.classList.remove('hidden')}
