@@ -43,7 +43,7 @@
 </div>
 <div class="loading-overlay hidden" id="loading-overlay"><div class="spinner"></div><p id="loading-text">Thinking...</p></div>
 <script>
-const CONFIG={API_KEY:localStorage.getItem('gm_key')||'',MODEL:'gemini-3.6-flash',STORAGE_KEY:'classmate_ai_data'};
+const CONFIG={API_KEY:localStorage.getItem('gm_key')||'',MODEL:'llama3-8b-8192',STORAGE_KEY:'classmate_ai_data',GROQ:true};
 const state={subject:null,topic:'',difficulty:'medium',quickRevision:false,conversation:[],learningState:null,sessionActive:false,sessionCount:0,totalScore:0,history:[],endRetryCount:0};
 const $=id=>document.getElementById(id);
 const homeView=$('home-view'),chatView=$('chat-view'),reportView=$('report-view'),progressView=$('progress-view');
@@ -56,13 +56,30 @@ const loadingOverlay=$('loading-overlay'),loadingText=$('loading-text');
 function loadData(){try{const raw=localStorage.getItem(CONFIG.STORAGE_KEY);if(raw){const data=JSON.parse(raw);state.sessionCount=data.sessionCount||0;state.totalScore=data.totalScore||0;state.history=data.history||[]}}catch{}}
 function saveData(){try{localStorage.setItem(CONFIG.STORAGE_KEY,JSON.stringify({sessionCount:state.sessionCount,totalScore:state.totalScore,history:state.history.slice(-50)}))}catch{}}
 
-async function callGemini(systemPrompt,messages,opts={}){const contents=[];if(systemPrompt){contents.push({role:'user',parts:[{text:systemPrompt}]});contents.push({role:'model',parts:[{text:'Understood. I will follow these instructions.'}]})}
-for(const m of messages){contents.push({role:m.role==='ai'||m.role==='model'?'model':'user',parts:[{text:m.text}]})}
-const resp=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.MODEL}:generateContent?key=${CONFIG.API_KEY}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents,generationConfig:{temperature:opts.temperature??0.7,maxOutputTokens:opts.maxTokens??2048}})});
-if(!resp.ok){const err=await resp.json().catch(()=>({}));throw new Error(err?.error?.message||`HTTP ${resp.status}`)}
-const data=await resp.json();return data.candidates[0].content.parts[0].text}
-
-const LOADING_MESSAGES=['Thinking...','Wait, I\'m trying to understand...','Okay... give me a second.','Let me process that...','Hmm, that\'s interesting...'];
+async function callGemini(systemPrompt, messages, opts={}) {
+  const msgs = [];
+  if (systemPrompt) msgs.push({role:'system', content:systemPrompt});
+  for (const m of messages) {
+    msgs.push({role: m.role==='ai' ? 'assistant' : 'user', content: m.text});
+  }
+  const url = CONFIG.GROQ
+    ? 'https://api.groq.com/openai/v1/chat/completions'
+    : `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.MODEL}:generateContent?key=${CONFIG.API_KEY}`;
+  const body = CONFIG.GROQ
+    ? JSON.stringify({model:CONFIG.MODEL,messages:msgs,temperature:opts.temperature??0.7,max_tokens:opts.maxTokens??800})
+    : JSON.stringify({contents:msgs.map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]})),generationConfig:{temperature:opts.temperature??0.7,maxOutputTokens:opts.maxTokens??800}});
+  const res = await fetch(url, {
+    method:'POST',
+    headers:{'Content-Type':'application/json', ...(CONFIG.GROQ ? {'Authorization':'Bearer '+CONFIG.API_KEY} : {})}
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(()=>({}));
+    throw new Error(err?.error?.message || 'HTTP ' + res.status);
+  }
+  const data = await res.json();
+  if (CONFIG.GROQ) return data.choices?.[0]?.message?.content || '';
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
 function showLoading(msg){loadingText.textContent=msg||LOADING_MESSAGES[Math.floor(Math.random()*LOADING_MESSAGES.length)];loadingOverlay.classList.remove('hidden')}
 function hideLoading(){loadingOverlay.classList.add('hidden')}
 
@@ -108,7 +125,7 @@ progressContent.innerHTML='<h2>📈 Your Progress</h2><div class="stat-grid"><di
 
 loadData();
 // Check if API key is set
-if(!CONFIG.API_KEY){const k=prompt('Enter your Gemini API key (from aistudio.google.com/apikey):');if(k){localStorage.setItem('gm_key',k);CONFIG.API_KEY=k;location.reload()}else{alert('API key required to use Classmate AI')}}
+if(!CONFIG.API_KEY){const k=prompt('Enter your Groq API key (from console.groq.com/keys):');if(k){localStorage.setItem('gm_key',k);CONFIG.API_KEY=k;location.reload()}else{alert('API key required to use Classmate AI (get one free at console.groq.com/keys)')}}
 updateStartBtn();
 </script>
 </body>
