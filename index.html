@@ -98,14 +98,14 @@ async function sendMessage(){
   const typingEl=document.createElement('div');
   typingEl.className='msg ai streaming';
   typingEl.textContent='...';
-  chatMessages.appendChild(typingEl);
-  chatMessages.scrollTop=chatMessages.scrollHeight;
+  messages.appendChild(typingEl);
+  messages.scrollTop=messages.scrollHeight;
   let fullResp='';
   try{
     const instr=state.lastEval?.recommended_action||'ask_why';
     const fi=state.lastEval?.is_textbook_answer?'ask_own_words':instr;
     const sp='You are CLASSMATE AI — confused student learning "'+state.topic+'" in '+state.subject+'. Curious, friendly, never gives answers. 1-2 sentences. Difficulty: '+state.difficulty+'. Quick revision: '+state.quickRevision+'. EVALUATOR: '+fi+'. Respond to student.';
-    const reply=await callGemini(sp,state.conversation,{temperature:0.75,maxTokens:250,onChunk:t=>{fullResp+=t;typingEl.className='msg ai';typingEl.textContent=fullResp;chatMessages.scrollTop=chatMessages.scrollHeight}});
+    const reply=await callGemini(sp,state.conversation,{temperature:0.75,maxTokens:250,onChunk:t=>{fullResp+=t;typingEl.className='msg ai';typingEl.textContent=fullResp;messages.scrollTop=messages.scrollHeight}});
     typingEl.textContent=reply;
     fullResp=reply;
     hideLoading();
