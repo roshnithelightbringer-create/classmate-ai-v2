@@ -56,30 +56,13 @@ const loadingOverlay=$('loading-overlay'),loadingText=$('loading-text');
 function loadData(){try{const raw=localStorage.getItem(CONFIG.STORAGE_KEY);if(raw){const data=JSON.parse(raw);state.sessionCount=data.sessionCount||0;state.totalScore=data.totalScore||0;state.history=data.history||[]}}catch{}}
 function saveData(){try{localStorage.setItem(CONFIG.STORAGE_KEY,JSON.stringify({sessionCount:state.sessionCount,totalScore:state.totalScore,history:state.history.slice(-50)}))}catch{}}
 
-async function callGemini(systemPrompt, messages, opts={}) {
-  const contents = [];
-  if (systemPrompt) {
-    contents.push({role:'user', parts:[{text:systemPrompt}]});
-    contents.push({role:'model', parts:[{text:'Understood.'}]});
-  }
-  for (const m of messages) {
-    contents.push({role: m.role==='ai' ? 'model' : 'user', parts:[{text:m.text}]});
-  }
-  const temp = opts.temperature ?? 0.7;
-  const maxT = opts.maxTokens ?? 800;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.MODEL}:generateContent?key=${CONFIG.API_KEY}`;
-  const res = await fetch(url, {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({contents, generationConfig:{temperature:temp,maxOutputTokens:maxT}})
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(()=>({}));
-    throw new Error(err?.error?.message || 'HTTP ' + res.status);
-  }
-  const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-}
+async function callGemini(systemPrompt,messages,opts={}){const contents=[];if(systemPrompt){contents.push({role:'user',parts:[{text:systemPrompt}]});contents.push({role:'model',parts:[{text:'Understood. I will follow these instructions.'}]})}
+for(const m of messages){contents.push({role:m.role==='ai'||m.role==='model'?'model':'user',parts:[{text:m.text}]})}
+const resp=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.MODEL}:generateContent?key=${CONFIG.API_KEY}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents,generationConfig:{temperature:opts.temperature??0.7,maxOutputTokens:opts.maxTokens??2048}})});
+if(!resp.ok){const err=await resp.json().catch(()=>({}));throw new Error(err?.error?.message||`HTTP ${resp.status}`)}
+const data=await resp.json();return data.candidates[0].content.parts[0].text}
+
+const LOADING_MESSAGES=['Thinking...','Wait, I\'m trying to understand...','Okay... give me a second.','Let me process that...','Hmm, that\'s interesting...'];
 function showLoading(msg){loadingText.textContent=msg||LOADING_MESSAGES[Math.floor(Math.random()*LOADING_MESSAGES.length)];loadingOverlay.classList.remove('hidden')}
 function hideLoading(){loadingOverlay.classList.add('hidden')}
 
@@ -99,30 +82,10 @@ chatInput.addEventListener('input',()=>{chatInput.style.height='auto';chatInput.
 chatInput.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}});
 sendBtn.addEventListener('click',sendMessage);
 
-async function sendMessage() {
-  const text = chatInput.value.trim();
-  if (!text || sendBtn.disabled) return;
-  chatInput.value = '';
-  chatInput.style.height = 'auto';
-  state.conversation.push({role:'user', text});
-  addMessage('user', text);
-  sendBtn.disabled = true;
-  chatInput.disabled = true;
-  showLoading('');
-  try {
-    const sp = `You are the CLASSMATE AI. You are a student who is confused about "${state.topic}" in ${state.subject}. Your difficulty level is ${state.difficulty}. Your goal is to LEARN from the user who is teaching you. Ask follow-up questions to show you're trying to understand. Keep responses to 1-3 sentences. Be curious and slightly confused but trying.`;
-    const reply = await callGemini(sp, state.conversation, {temperature:0.75, maxTokens:250});
-    hideLoading();
-    addMessage('ai', reply);
-    state.conversation.push({role:'ai', text:reply});
-  } catch (e) {
-    hideLoading();
-    addMessage('ai', '😅 Hmm, I got a bit lost there. Can you try explaining that again?');
-  }
-  sendBtn.disabled = false;
-  chatInput.disabled = false;
-  chatInput.focus();
-}
+async function sendMessage(){const text=chatInput.value.trim();if(!text||sendBtn.disabled)return;chatInput.value='';chatInput.style.height='auto';addMessage('user',text);state.conversation.push({role:'user',text});sendBtn.disabled=true;chatInput.disabled=true;try{showLoading('Analyzing your explanation...');const evalSystemPrompt='You are the EVALUATOR AI for Classmate AI. Your job is to silently analyze the teaching conversation.\n\nTopic: "'+state.topic+'"\nSubject: '+state.subject+'\nDifficulty: '+state.difficulty+'\nQuick Revision: '+state.quickRevision+'\n\nAnalyze the student\'s latest explanation and the conversation so far.\nReturn ONLY valid JSON with no markdown formatting, no code blocks, just raw JSON:\n\n{\n  "understanding": "strong|partial|weak",\n  "confidence": "high|medium|low",\n  "explanation_quality": 0.0-1.0,\n  "misconceptions": ["description of any misconception"] or [],\n  "missing_prerequisites": ["concept"] or [],\n  "needs_challenge": true/false,\n  "needs_simplification": true/false,\n  "is_textbook_answer": true/false,\n  "recommended_action": "ask_why|ask_example|ask_application|challenge_misconception|simplify_question|introduce_misunderstanding|probe_deeper|ask_connection|ask_own_words|increase_difficulty|reduce_difficulty|praise_understanding|request_clarification"\n}';const evalResult=await callGemini(evalSystemPrompt,state.conversation,{temperature:0.2,maxTokens:800});let evalData;try{const cleaned=evalResult.replace(/```json?/g,'').replace(/```/g,'').trim();evalData=JSON.parse(cleaned)}catch{evalData={understanding:'partial',confidence:'medium',explanation_quality:0.5,misconceptions:[],missing_prerequisites:[],needs_challenge:false,needs_simplification:false,is_textbook_answer:false,recommended_action:'ask_why'}};state.learningState=evalData;const confusionPercent=Math.round((1-(evalData.explanation_quality||0.5))*85+10);setConfusion(confusionPercent);let classmateInstruction=evalData.recommended_action||'ask_why';if(evalData.is_textbook_answer){classmateInstruction='ask_own_words'}
+hideLoading();showLoading(state.quickRevision?'Quick thinking...':'Thinking...');const classmateSystemPrompt='You are the CLASSMATE AI — a confused but curious student. The user is teaching you "'+state.topic+'" in '+state.subject+'.\n\nYour personality:\n- Curious, slightly nervous, friendly\n- You genuinely want to understand\n- You ask natural follow-up questions\n- You sometimes misunderstand (plausibly)\n- You NEVER give answers — you\'re the student\n- You keep responses 1-3 sentences\n- You use occasional emojis but not every message\n\nDifficulty context: '+state.difficulty+' — '+(state.difficulty==='easy'?'ask simple questions':state.difficulty==='hard'?'ask deeper challenging questions':'ask moderate questions')+'\nQuick revision: '+state.quickRevision+' — '+(state.quickRevision?'keep responses very short, rapid-fire':'normal pace')+'\n\nINSTRUCTION FROM EVALUATOR: '+classmateInstruction+'\n\nRespond to the student\'s last message naturally based on this instruction.';const classmateReply=await callGemini(classmateSystemPrompt,state.conversation,{temperature:0.75,maxTokens:400});hideLoading();addMessage('ai',classmateReply);state.conversation.push({role:'ai',text:classmateReply});if(evalData.understanding==='strong'){setExpression('understanding')}else if(evalData.needs_challenge){setExpression('skeptical')}else{setExpression('thinking')}}catch(err){hideLoading();addMessage('ai','😅 Oops, I got a bit lost there. Can you say that again?')}
+sendBtn.disabled=false;chatInput.disabled=false;chatInput.focus()}
+
 endSessionBtn.addEventListener('click',async()=>{if(state.conversation.length<3){addMessage('ai','😅 You haven\'t taught me anything yet! Say something.');return}sendBtn.disabled=true;chatInput.disabled=true;endSessionBtn.disabled=true;try{showLoading('Let me see how well you taught me...');const evalSystemPrompt='You are the EVALUATOR AI for Classmate AI. Generate a complete learning report.\n\nTopic: "'+state.topic+'"\nSubject: '+state.subject+'\nDifficulty: '+state.difficulty+'\nQuick Revision: '+state.quickRevision+'\n\nReview the ENTIRE conversation. Return ONLY valid JSON with no markdown formatting, no code blocks:\n\n{\n  "overall_score": 0-100,\n  "level": "Excellent understanding|Strong understanding|Getting there|Needs another explanation|Let\'s rebuild the basics",\n  "strong_concepts": ["concept1", "concept2"],\n  "partial_concepts": ["concept3"],\n  "weak_concepts": ["concept4"],\n  "misconceptions": [\n    {"concept": "misconception", "correction": "what\'s actually true"}\n  ],\n  "knowledge_gaps": ["gap1"],\n  "prerequisite_gaps": ["prereq1"],\n  "explanation_quality": "clear|mostly clear|unclear",\n  "application_ability": "strong|partial|weak",\n  "confidence_vs_understanding": "accurate|overconfident|underconfident",\n  "recommendations": ["rec1", "rec2", "rec3"]\n}';const evalResult=await callGemini(evalSystemPrompt,state.conversation,{temperature:0.3,maxTokens:1500});let report;try{const cleaned=evalResult.replace(/```json?/g,'').replace(/```/g,'').trim();report=JSON.parse(cleaned)}catch{report={overall_score:65,level:'Getting there',strong_concepts:[],partial_concepts:[],weak_concepts:[],misconceptions:[],knowledge_gaps:[],prerequisite_gaps:[],explanation_quality:'mostly clear',application_ability:'partial',confidence_vs_understanding:'accurate',recommendations:['Review the basics','Try teaching again']}}
 hideLoading();state.totalScore+=report.overall_score;state.history.unshift({subject:state.subject,topic:state.topic,difficulty:state.difficulty,quickRevision:state.quickRevision,score:report.overall_score,level:report.level,date:new Date().toISOString(),strong:report.strong_concepts,weak:report.weak_concepts});saveData();showReport(report)}catch(err){hideLoading();addMessage('ai','😅 Sorry, I got confused evaluating. Let\'s try ending again.');endSessionBtn.disabled=false;sendBtn.disabled=false;chatInput.disabled=false}});
 
